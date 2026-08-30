@@ -1,0 +1,30 @@
+﻿# Node / npm
+node_modules/
+dist/
+build/
+.svelte-kit/
+
+# Rust / Cargo
+target/
+Cargo.lock
+
+# Tauri
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/nsis/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+
+# Sensitive — never commit these
+*.key
+*.pem

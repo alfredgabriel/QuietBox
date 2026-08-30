@@ -1,0 +1,43 @@
+﻿[package]
+name = "quietbox"
+version = "0.1.0"
+description = "CryptVault — Encrypted container with plausible deniability"
+authors = ["alfredgabriel"]
+edition = "2021"
+
+[lib]
+name = "quietbox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+# Crypto crates (RustCrypto ecosystem - audited)
+aes-gcm = { version = "0.10", features = ["aes"] }
+argon2 = { version = "0.5", features = ["std"] }
+rand = { version = "0.8", features = ["std", "std_rng"] }
+rand_chacha = "0.3"
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2"
+blake3 = "1"
+
+# Async runtime for streaming I/O
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "1"
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
+codegen-units = 1
