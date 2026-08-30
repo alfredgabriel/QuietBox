@@ -1,4 +1,4 @@
-use tauri::command;
+use tauri::{command, AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 use std::fs::OpenOptions;
 
@@ -10,26 +10,33 @@ use crate::crypto::container::{
 };
 use crate::archive::{pack_paths, unpack_to};
 
+#[derive(Clone, serde::Serialize)]
+struct ProgressPayload {
+    progress: f64,
+    status: String,
+}
+
 #[command]
-pub async fn pick_file(app: tauri::AppHandle) -> Result<Option<String>, CryptVaultError> {
+pub async fn pick_file(app: AppHandle) -> Result<Option<String>, CryptVaultError> {
     let file_path = app.dialog().file().blocking_pick_file();
     Ok(file_path.map(|p| p.to_string()))
 }
 
 #[command]
-pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, CryptVaultError> {
+pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, CryptVaultError> {
     let folder_path = app.dialog().file().blocking_pick_folder();
     Ok(folder_path.map(|p| p.to_string()))
 }
 
 #[command]
-pub async fn pick_save_path(app: tauri::AppHandle) -> Result<Option<String>, CryptVaultError> {
+pub async fn pick_save_path(app: AppHandle) -> Result<Option<String>, CryptVaultError> {
     let save_path = app.dialog().file().blocking_save_file();
     Ok(save_path.map(|p| p.to_string()))
 }
 
 #[command]
 pub async fn create_container(
+    app: AppHandle,
     path: String,
     total_size_mb: u64,
     decoy_password: String,
@@ -39,6 +46,14 @@ pub async fn create_container(
     kdf_t_cost: Option<u32>,
     kdf_p_cost: Option<u32>,
 ) -> Result<(), CryptVaultError> {
+    let app_clone = app.clone();
+    let on_progress = move |progress: f64, status: &str| {
+        let _ = app_clone.emit("progress", ProgressPayload {
+            progress,
+            status: status.to_string(),
+        });
+    };
+
     let decoy_zip = pack_paths(&decoy_files)?;
     
     let mut file = OpenOptions::new()
@@ -63,6 +78,7 @@ pub async fn create_container(
         decoy_password.as_bytes(),
         hidden_max_size_bytes,
         &kdf_params,
+        on_progress,
     )?;
 
     Ok(())
@@ -70,6 +86,7 @@ pub async fn create_container(
 
 #[command]
 pub async fn add_hidden_volume(
+    app: AppHandle,
     container_path: String,
     decoy_password: Option<String>,
     hidden_password: String,
@@ -80,6 +97,14 @@ pub async fn add_hidden_volume(
     kdf_t_cost: Option<u32>,
     kdf_p_cost: Option<u32>,
 ) -> Result<(), CryptVaultError> {
+    let app_clone = app.clone();
+    let on_progress = move |progress: f64, status: &str| {
+        let _ = app_clone.emit("progress", ProgressPayload {
+            progress,
+            status: status.to_string(),
+        });
+    };
+
     let hidden_zip = pack_paths(&hidden_files)?;
     
     let mut file = OpenOptions::new()
@@ -92,9 +117,7 @@ pub async fn add_hidden_volume(
     if let Some(t) = kdf_t_cost { kdf_params.t_cost = t; }
     if let Some(p) = kdf_p_cost { kdf_params.p_cost = p; }
 
-    // Calculate decoy_end by decrypting decoy header
     let decoy_end = if let Some(decoy_pw) = decoy_password {
-        // Read decoy header block
         let mut decoy_block = vec![0u8; HEADER_BLOCK_SIZE];
         use std::io::{Seek, SeekFrom, Read};
         file.seek(SeekFrom::Start(DECOY_HEADER_OFFSET))?;
@@ -123,6 +146,7 @@ pub async fn add_hidden_volume(
         hidden_password.as_bytes(),
         max_hidden_size_bytes,
         &kdf_params,
+        on_progress,
     )?;
 
     Ok(())

@@ -10,8 +10,6 @@ use crate::crypto::cipher::{encrypt, decrypt, generate_nonce};
 use crate::errors::CryptVaultError;
 
 /// Fixed size of an encrypted header block on disk (bytes).
-/// Layout: [ salt (32) | nonce (12) | ciphertext_len (2) | ciphertext (variable) | zero-pad to 512 ]
-/// Salt is plaintext (not secret, just unique) so we can bootstrap Argon2id.
 pub const HEADER_BLOCK_SIZE: usize = 512;
 
 /// Byte offset where the decoy volume header is always written.
@@ -30,17 +28,11 @@ pub const CHUNK_SIZE: usize = 1024 * 1024;
 #[derive(Debug, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct VolumeHeader {
     pub version: u8,
-    /// Unique Argon2id salt for THIS volume. Also stored in plaintext at block[0..32].
     pub salt: [u8; 32],
-    /// AES-256-GCM nonce for the data section.
     pub data_nonce: [u8; 12],
-    /// Plaintext byte count of the data section.
     pub data_size: u64,
-    /// BLAKE3 hash of the plaintext — verified in constant time after decryption.
     pub data_checksum: [u8; 32],
-    /// Max bytes reserved for hidden volume (decoy header only; 0 = no hidden).
     pub hidden_max_size: u64,
-    /// KDF parameters used for this volume.
     pub kdf_params: KdfParams,
 }
 
@@ -55,7 +47,6 @@ impl VolumeHeader {
     }
 }
 
-/// Computes BLAKE3 hash of data.
 pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
     let hash = blake3::hash(data);
     let mut out = [0u8; 32];
@@ -63,9 +54,6 @@ pub fn blake3_hash(data: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Encrypts a VolumeHeader into a HEADER_BLOCK_SIZE byte block.
-/// Block layout: [ salt (32) | nonce (12) | ciphertext_len (2) | ciphertext | zero-pad ]
-/// The salt and nonce are NOT secret — only unique per volume.
 pub fn seal_header(header: &VolumeHeader, key: &DerivedKey) -> Result<Vec<u8>, CryptVaultError> {
     let header_bytes = header.to_bytes()?;
     let nonce = generate_nonce();
@@ -78,17 +66,15 @@ pub fn seal_header(header: &VolumeHeader, key: &DerivedKey) -> Result<Vec<u8>, C
     }
 
     let mut block = vec![0u8; HEADER_BLOCK_SIZE];
-    block[..32].copy_from_slice(&header.salt);   // salt in plaintext
-    block[32..44].copy_from_slice(&nonce);        // nonce in plaintext
+    block[..32].copy_from_slice(&header.salt);
+    block[32..44].copy_from_slice(&nonce);
     
     let ct_len = ciphertext.len() as u16;
-    block[44..46].copy_from_slice(&ct_len.to_le_bytes()); // ciphertext length (2 bytes)
+    block[44..46].copy_from_slice(&ct_len.to_le_bytes());
     block[46..46 + ciphertext.len()].copy_from_slice(&ciphertext);
     Ok(block)
 }
 
-/// Decrypts a header block into a VolumeHeader.
-/// The caller must already know the salt (block[0..32]) to derive the key.
 pub fn unseal_header(block: &[u8], key: &DerivedKey) -> Result<VolumeHeader, CryptVaultError> {
     if block.len() < HEADER_BLOCK_SIZE {
         return Err(CryptVaultError::InvalidContainer);
@@ -107,8 +93,6 @@ pub fn unseal_header(block: &[u8], key: &DerivedKey) -> Result<VolumeHeader, Cry
     VolumeHeader::from_bytes(&plaintext)
 }
 
-/// Returns the byte offset of the hidden volume header within the container.
-/// Derived deterministically from the hidden key — never stored anywhere.
 pub fn hidden_header_offset(
     hidden_key: &DerivedKey,
     total_size: u64,
@@ -129,26 +113,25 @@ pub fn hidden_header_offset(
     Ok(safe_start + (raw % range))
 }
 
-/// Creates a new container: fills with CSPRNG bytes, writes encrypted decoy header + data.
-/// Returns the byte offset immediately after decoy data (used for hidden volume placement).
-pub fn create_decoy_volume<W: Write + Seek>(
+pub fn create_decoy_volume<W: Write + Seek, F: FnMut(f64, &str)>(
     writer: &mut W,
     total_size: u64,
     decoy_data: &[u8],
     decoy_password: &[u8],
     hidden_max_size: u64,
     kdf_params: &KdfParams,
+    mut on_progress: F,
 ) -> Result<u64, CryptVaultError> {
     let needed = HEADER_BLOCK_SIZE as u64
         + decoy_data.len() as u64
-        + 16  // GCM tag
+        + 16
         + SAFETY_GAP
         + hidden_max_size;
     if needed > total_size {
         return Err(CryptVaultError::InsufficientSpace);
     }
 
-    // Fill entire file with CSPRNG random bytes
+    on_progress(0.0, "Preparing random fill...");
     writer.seek(SeekFrom::Start(0))?;
     let mut chunk = vec![0u8; CHUNK_SIZE];
     let mut written = 0u64;
@@ -157,12 +140,17 @@ pub fn create_decoy_volume<W: Write + Seek>(
         OsRng.fill_bytes(&mut chunk[..to_write]);
         writer.write_all(&chunk[..to_write])?;
         written += to_write as u64;
+        
+        let p = (written as f64 / total_size as f64) * 0.7;
+        on_progress(p, "Filling container with high-entropy noise...");
     }
 
-    // Derive key and build header
+    on_progress(0.7, "Deriving encryption keys...");
     let salt = generate_salt();
     let key = derive_key(decoy_password, &salt, kdf_params)?;
     let data_nonce = generate_nonce();
+    
+    on_progress(0.8, "Encrypting decoy volume...");
     let encrypted_data = encrypt(&key.0, &data_nonce, decoy_data)?;
     let checksum = blake3_hash(decoy_data);
 
@@ -176,22 +164,22 @@ pub fn create_decoy_volume<W: Write + Seek>(
         kdf_params: kdf_params.clone(),
     };
 
-    // Write encrypted header at offset 0
+    on_progress(0.9, "Writing decoy headers...");
     let header_block = seal_header(&header, &key)?;
     writer.seek(SeekFrom::Start(DECOY_HEADER_OFFSET))?;
     writer.write_all(&header_block)?;
-    // Write encrypted data immediately after header
     writer.write_all(&encrypted_data)?;
 
     let decoy_end = DECOY_HEADER_OFFSET
         + HEADER_BLOCK_SIZE as u64
         + encrypted_data.len() as u64;
     writer.flush()?;
+    
+    on_progress(1.0, "Decoy volume created successfully");
     Ok(decoy_end)
 }
 
-/// Adds a hidden volume to an existing container.
-pub fn add_hidden_volume<RW: Read + Write + Seek>(
+pub fn add_hidden_volume<RW: Read + Write + Seek, F: FnMut(f64, &str)>(
     rw: &mut RW,
     total_size: u64,
     decoy_end: u64,
@@ -199,15 +187,20 @@ pub fn add_hidden_volume<RW: Read + Write + Seek>(
     hidden_password: &[u8],
     hidden_max_size: u64,
     kdf_params: &KdfParams,
+    mut on_progress: F,
 ) -> Result<(), CryptVaultError> {
     if hidden_data.len() as u64 > hidden_max_size {
         return Err(CryptVaultError::InsufficientSpace);
     }
 
+    on_progress(0.05, "Deriving hidden keys...");
     let salt = generate_salt();
     let key = derive_key(hidden_password, &salt, kdf_params)?;
+    
+    on_progress(0.2, "Locating hidden volume offset...");
     let offset = hidden_header_offset(&key, total_size, decoy_end, hidden_max_size)?;
 
+    on_progress(0.4, "Encrypting hidden volume...");
     let data_nonce = generate_nonce();
     let encrypted_data = encrypt(&key.0, &data_nonce, hidden_data)?;
     let checksum = blake3_hash(hidden_data);
@@ -222,49 +215,43 @@ pub fn add_hidden_volume<RW: Read + Write + Seek>(
         kdf_params: kdf_params.clone(),
     };
 
+    on_progress(0.7, "Writing hidden headers...");
     let header_block = seal_header(&header, &key)?;
     rw.seek(SeekFrom::Start(offset))?;
     rw.write_all(&header_block)?;
     rw.write_all(&encrypted_data)?;
     rw.flush()?;
+    
+    on_progress(1.0, "Hidden volume created successfully");
     Ok(())
 }
 
-/// Result of a successful container open.
 pub struct OpenResult {
     pub plaintext: Vec<u8>,
     pub is_hidden: bool,
 }
 
-/// Opens a container by password.
-///
-/// TIMING GUARANTEE: Argon2id is always run for BOTH the decoy and hidden
-/// candidate, regardless of which one succeeds first, to eliminate timing oracles.
 pub fn open_container<R: Read + Seek>(
     reader: &mut R,
     total_size: u64,
     password: &[u8],
     kdf_params: &KdfParams,
 ) -> Result<OpenResult, CryptVaultError> {
-    // Read decoy header block (always at offset 0)
     let mut decoy_block = vec![0u8; HEADER_BLOCK_SIZE];
     reader.seek(SeekFrom::Start(DECOY_HEADER_OFFSET))?;
     reader.read_exact(&mut decoy_block)?;
 
-    // Extract salt from plaintext prefix of decoy block
     let decoy_salt: [u8; 32] = decoy_block[..32]
         .try_into()
         .map_err(|_| CryptVaultError::InvalidContainer)?;
 
-    // Derive decoy key (always run — never skip for timing reasons)
     let decoy_key = derive_key(password, &decoy_salt, kdf_params)?;
 
-    // Attempt decoy decryption
     let decoy_result: Result<OpenResult, CryptVaultError> = (|| {
         let header = unseal_header(&decoy_block, &decoy_key)?;
         let data_offset = DECOY_HEADER_OFFSET + HEADER_BLOCK_SIZE as u64;
         reader.seek(SeekFrom::Start(data_offset))?;
-        let enc_size = header.data_size as usize + 16; // +16 GCM tag
+        let enc_size = header.data_size as usize + 16;
         let mut enc = vec![0u8; enc_size];
         reader.read_exact(&mut enc)?;
         let pt = decrypt(&decoy_key.0, &header.data_nonce, &enc)?;
@@ -275,10 +262,6 @@ pub fn open_container<R: Read + Seek>(
         Ok(OpenResult { plaintext: pt.to_vec(), is_hidden: false })
     })();
 
-    // Always derive hidden candidate key too (timing equality).
-    // Hidden salt: we derive a candidate using BLAKE3 of decoy_key as a
-    // fast bootstrap to find the candidate block, then re-derive properly
-    // from the salt embedded in that block.
     let candidate_offset = {
         let cand_key = DerivedKey({
             let hash = blake3::hash(&decoy_key.0);
@@ -299,7 +282,6 @@ pub fn open_container<R: Read + Seek>(
             let hsalt: [u8; 32] = hblock[..32]
                 .try_into()
                 .map_err(|_| CryptVaultError::InvalidContainer)?;
-            // Derive proper hidden key from the real salt in the block
             let hkey = derive_key(password, &hsalt, kdf_params)?;
             let hheader = unseal_header(&hblock, &hkey)?;
             let data_offset = offset + HEADER_BLOCK_SIZE as u64;
@@ -402,7 +384,7 @@ mod tests {
         let mut buf = vec![0u8; total as usize];
         let mut cur = Cursor::new(&mut buf);
         let decoy_end = create_decoy_volume(
-            &mut cur, total, b"decoy content", b"decoy-pw", 1024 * 1024, &fast_kdf()
+            &mut cur, total, b"decoy content", b"decoy-pw", 1024 * 1024, &fast_kdf(), |_, _| {}
         ).unwrap();
         assert_eq!(buf.len(), total as usize);
         assert!(decoy_end > HEADER_BLOCK_SIZE as u64);
@@ -413,7 +395,7 @@ mod tests {
         let total = 1024 * 1024u64;
         let mut buf = vec![0u8; total as usize];
         let mut cur = Cursor::new(&mut buf);
-        create_decoy_volume(&mut cur, total, b"data", b"pw", 0, &fast_kdf()).unwrap();
+        create_decoy_volume(&mut cur, total, b"data", b"pw", 0, &fast_kdf(), |_, _| {}).unwrap();
         let zero_count = buf.iter().filter(|&&b| b == 0).count();
         let zero_ratio = zero_count as f64 / total as f64;
         assert!(zero_ratio < 0.01,
