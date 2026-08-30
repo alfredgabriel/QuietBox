@@ -2,6 +2,7 @@ pub mod crypto;
 pub mod commands;
 pub mod fs_ops;
 pub mod errors;
+pub mod archive;
 
 pub fn run() {
     tauri::Builder::default()
