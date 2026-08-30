@@ -1,4 +1,4 @@
-﻿pub mod crypto;
+pub mod crypto;
 pub mod commands;
 pub mod fs_ops;
 pub mod errors;
