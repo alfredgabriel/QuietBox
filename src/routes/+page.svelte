@@ -1,22 +1,14 @@
 <script lang="ts">
-  import { activeVault, currentModal } from '$lib/stores/appState';
-  import DesktopGrid from '$lib/components/DesktopGrid.svelte';
-  import VaultExplorer from '$lib/components/VaultExplorer.svelte';
-  import CreateVaultModal from '$lib/components/CreateVaultModal.svelte';
-  import UnlockVaultModal from '$lib/components/UnlockVaultModal.svelte';
-  import ExtraKeyModal from '$lib/components/ExtraKeyModal.svelte';
+  import { view } from '$lib/stores/appState';
+  import HomeScreen from '$lib/components/HomeScreen.svelte';
+  import CreateView from '$lib/components/CreateView.svelte';
+  import ArchiveView from '$lib/components/ArchiveView.svelte';
 </script>
 
-{#if $activeVault}
-  <VaultExplorer />
-{:else}
-  <DesktopGrid />
-{/if}
-
-{#if $currentModal === 'create'}
-  <CreateVaultModal />
-{:else if $currentModal === 'unlock'}
-  <UnlockVaultModal />
-{:else if $currentModal === 'extra_key'}
-  <ExtraKeyModal />
+{#if $view === 'home'}
+  <HomeScreen />
+{:else if $view === 'create'}
+  <CreateView />
+{:else if $view === 'open'}
+  <ArchiveView />
 {/if}

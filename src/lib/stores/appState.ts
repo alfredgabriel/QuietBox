@@ -1,16 +1,5 @@
 import { writable } from 'svelte/store';
 
-export interface VaultItem {
-  id: string;
-  name: string;
-  path: string;
-  grid_x: number;
-  grid_y: number;
-  size_bytes: number;
-  created_at: number;
-  has_extra_key: boolean;
-}
-
 export interface VaultFileEntry {
   name: string;
   path: string;
@@ -18,17 +7,28 @@ export interface VaultFileEntry {
   size: number;
 }
 
-export interface ActiveVaultSession {
-  id: string;
+export interface RecentArchive {
+  path: string;
+  name: string;
+  size_bytes: number;
+  opened_at: number;
+  has_alt_key: boolean;
+}
+
+export type AppView = 'home' | 'create' | 'open';
+
+export interface OpenSession {
+  path: string;
   name: string;
   password: string;
-  is_extra: boolean;
+  is_alt: boolean;
+  has_alt_key: boolean;
   entries: VaultFileEntry[];
 }
 
-export const vaultsList = writable<VaultItem[]>([]);
-export const activeVault = writable<ActiveVaultSession | null>(null);
-export const currentModal = writable<'none' | 'create' | 'unlock' | 'extra_key' | 'settings'>('none');
-export const selectedVaultId = writable<string | null>(null);
-export const isProcessing = writable<boolean>(false);
-export const processingStatus = writable<string>('');
+export const view = writable<AppView>('home');
+export const pendingFiles = writable<string[]>([]);
+export const openSession = writable<OpenSession | null>(null);
+export const isLoading = writable(false);
+export const loadingProgress = writable(0);
+export const loadingStatus = writable('');
