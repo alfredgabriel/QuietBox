@@ -1,29 +1,34 @@
 import { writable } from 'svelte/store';
 
-export type AppView = 'home' | 'create' | 'open' | 'settings';
-
-export interface ProgressState {
-  active: boolean;
-  progress: number;
-  status: string;
+export interface VaultItem {
+  id: string;
+  name: string;
+  path: string;
+  grid_x: number;
+  grid_y: number;
+  size_bytes: number;
+  created_at: number;
+  has_extra_key: boolean;
 }
 
-export const currentView = writable<AppView>('home');
-export const progressState = writable<ProgressState>({
-  active: false,
-  progress: 0,
-  status: ''
-});
-
-export const kdfSettings = writable({
-  m_cost: 262144, // 256 MB
-  t_cost: 3,
-  p_cost: 4
-});
-
-export function panicWipe() {
-  currentView.set('home');
-  progressState.set({ active: false, progress: 0, status: '' });
-  // Overwrite sensitive form fields or wipe session memory
-  window.location.reload();
+export interface VaultFileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
 }
+
+export interface ActiveVaultSession {
+  id: string;
+  name: string;
+  password: string;
+  is_extra: boolean;
+  entries: VaultFileEntry[];
+}
+
+export const vaultsList = writable<VaultItem[]>([]);
+export const activeVault = writable<ActiveVaultSession | null>(null);
+export const currentModal = writable<'none' | 'create' | 'unlock' | 'extra_key' | 'settings'>('none');
+export const selectedVaultId = writable<string | null>(null);
+export const isProcessing = writable<boolean>(false);
+export const processingStatus = writable<string>('');

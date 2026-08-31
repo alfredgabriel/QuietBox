@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 use zip::{ZipWriter, ZipArchive};
 use zip::write::SimpleFileOptions;
@@ -8,9 +9,15 @@ use zip::CompressionMethod;
 
 use crate::errors::CryptVaultError;
 
-/// Packs multiple files/directories into a single, uncompressed ZIP archive in memory.
-/// Using Stored (no compression) is critical because compression reduces entropy,
-/// which can make the file distinguishable from random noise or leak structural information.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VaultFileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// Packs multiple files/directories into an uncompressed ZIP archive in memory.
 pub fn pack_paths(paths: &[String]) -> Result<Vec<u8>, CryptVaultError> {
     let mut buf = Vec::new();
     {
@@ -47,7 +54,7 @@ pub fn pack_paths(paths: &[String]) -> Result<Vec<u8>, CryptVaultError> {
                     
                     let path_str = relative_path.to_str()
                         .ok_or_else(|| CryptVaultError::Serialization("Non-UTF8 path".into()))?
-                        .replace('\\', "/"); // standard zip forward slashes
+                        .replace('\\', "/");
 
                     if entry_path.is_dir() {
                         zip.add_directory(&path_str, options)
@@ -69,6 +76,110 @@ pub fn pack_paths(paths: &[String]) -> Result<Vec<u8>, CryptVaultError> {
     Ok(buf)
 }
 
+/// Creates a minimal default empty ZIP archive with a Welcome note.
+pub fn create_initial_zip(vault_name: &str) -> Result<Vec<u8>, CryptVaultError> {
+    let mut buf = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut buf));
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored);
+
+        let welcome_filename = "Readme.txt";
+        zip.start_file(welcome_filename, options)
+            .map_err(|e| CryptVaultError::Serialization(e.to_string()))?;
+
+        let note = format!("Welcome to {}\nYour files are safely stored inside this encrypted volume.", vault_name);
+        zip.write_all(note.as_bytes())?;
+
+        zip.finish().map_err(|e| CryptVaultError::Serialization(e.to_string()))?;
+    }
+    Ok(buf)
+}
+
+/// Lists all files and folders in an in-memory ZIP archive.
+pub fn list_zip_entries(zip_bytes: &[u8]) -> Result<Vec<VaultFileEntry>, CryptVaultError> {
+    if zip_bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
+        .map_err(|_e| CryptVaultError::InvalidContainer)?;
+
+    let mut entries = Vec::new();
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)
+            .map_err(|_e| CryptVaultError::InvalidContainer)?;
+        
+        let path_str = file.name().to_string();
+        let is_dir = file.is_dir() || path_str.ends_with('/');
+        let trimmed_path = path_str.trim_end_matches('/').to_string();
+        let name = Path::new(&trimmed_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&trimmed_path)
+            .to_string();
+
+        entries.push(VaultFileEntry {
+            name,
+            path: trimmed_path,
+            is_dir,
+            size: file.size(),
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Appends new files/folders to an existing in-memory ZIP archive.
+pub fn append_to_zip(existing_zip: &[u8], new_paths: &[String]) -> Result<Vec<u8>, CryptVaultError> {
+    let mut entries_map = std::collections::HashMap::new();
+
+    if !existing_zip.is_empty() {
+        if let Ok(mut archive) = ZipArchive::new(Cursor::new(existing_zip)) {
+            for i in 0..archive.len() {
+                if let Ok(mut file) = archive.by_index(i) {
+                    let mut data = Vec::new();
+                    let _ = file.read_to_end(&mut data);
+                    entries_map.insert(file.name().to_string(), (file.is_dir(), data));
+                }
+            }
+        }
+    }
+
+    // Pack new files
+    let packed_new = pack_paths(new_paths)?;
+    if let Ok(mut new_archive) = ZipArchive::new(Cursor::new(packed_new)) {
+        for i in 0..new_archive.len() {
+            if let Ok(mut file) = new_archive.by_index(i) {
+                let mut data = Vec::new();
+                let _ = file.read_to_end(&mut data);
+                entries_map.insert(file.name().to_string(), (file.is_dir(), data));
+            }
+        }
+    }
+
+    // Re-build consolidated ZIP
+    let mut out = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut out));
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored);
+
+        for (name, (is_dir, data)) in entries_map {
+            if is_dir {
+                let _ = zip.add_directory(&name, options);
+            } else {
+                if zip.start_file(&name, options).is_ok() {
+                    let _ = zip.write_all(&data);
+                }
+            }
+        }
+        zip.finish().map_err(|e| CryptVaultError::Serialization(e.to_string()))?;
+    }
+
+    Ok(out)
+}
+
 /// Unpacks an in-memory ZIP archive to a destination directory.
 pub fn unpack_to(zip_bytes: &[u8], output_dir: &str) -> Result<(), CryptVaultError> {
     let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
@@ -81,7 +192,6 @@ pub fn unpack_to(zip_bytes: &[u8], output_dir: &str) -> Result<(), CryptVaultErr
         let mut file = archive.by_index(i)
             .map_err(|_e| CryptVaultError::InvalidContainer)?;
         
-        // Sanitize path to prevent Zip Slip vulnerability
         let file_path = match file.enclosed_name() {
             Some(p) => p.to_owned(),
             None => continue,

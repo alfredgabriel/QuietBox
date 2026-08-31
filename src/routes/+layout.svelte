@@ -1,42 +1,26 @@
 <script lang="ts">
   import '../app.css';
   import Navbar from '$lib/components/Navbar.svelte';
-  import { panicWipe } from '$lib/stores/appState';
-  import { onMount } from 'svelte';
-
-  onMount(() => {
-    function handleKeydown(e: KeyboardEvent) {
-      // Global panic hotkey: Ctrl + Shift + Q
-      if (e.ctrlKey && e.shiftKey && (e.key === 'Q' || e.key === 'q')) {
-        e.preventDefault();
-        panicWipe();
-      }
-    }
-    window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
-  });
 </script>
 
-<div class="app-layout">
+<div class="app-shell">
   <Navbar />
-  <main class="main-content">
+  <main class="viewport">
     <slot />
   </main>
 </div>
 
 <style>
-  .app-layout {
+  .app-shell {
     display: flex;
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    background: #090d16;
   }
-
-  .main-content {
+  .viewport {
     flex: 1;
-    overflow-y: auto;
-    padding: 1.5rem;
-    display: flex;
-    justify-content: center;
+    overflow: hidden;
+    position: relative;
   }
 </style>
