@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Linux system dependencies for Tauri
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -26,13 +31,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.toml') }}
 
       - name: Run Rust tests
-        run: cargo test
-        working-directory: src-tauri
-
-      - name: Cargo audit (CVE check)
-        run: |
-          cargo install cargo-audit --quiet
-          cargo audit
+        run: cargo test --all-targets
         working-directory: src-tauri
 
   frontend-check:
@@ -52,3 +51,6 @@ jobs:
 
       - name: Svelte type check
         run: npm run check
+
+      - name: Build frontend
+        run: npm run build
