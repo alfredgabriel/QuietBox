@@ -10,7 +10,7 @@ use crate::crypto::container::{
     create_decoy_volume, add_hidden_volume as add_hidden, open_container as open_cont,
 };
 use crate::archive::{
-    unpack_to, create_initial_zip, list_zip_entries, append_to_zip,
+    unpack_to, extract_entries, create_initial_zip, list_zip_entries, append_to_zip,
     pack_paths, VaultFileEntry,
 };
 
@@ -268,6 +268,27 @@ pub async fn extract_archive(
     let result = open_cont(&mut file, total_size, password.as_bytes(), &kdf)?;
     emit_progress(&app, 0.7, "Extracting files…");
     unpack_to(&result.plaintext, &output_dir)?;
+    emit_progress(&app, 1.0, "Done");
+    Ok(())
+}
+
+
+/// Extract specific selected files from an archive.
+#[command]
+pub async fn extract_files(
+    app: AppHandle,
+    archive_path: String,
+    password: String,
+    entry_paths: Vec<String>,
+    output_dir: String,
+) -> Result<(), CryptVaultError> {
+    emit_progress(&app, 0.1, "Decrypting...");
+    let mut file = File::open(&archive_path)?;
+    let total_size = file.metadata()?.len();
+    let kdf = KdfParams::default();
+    let result = open_cont(&mut file, total_size, password.as_bytes(), &kdf)?;
+    emit_progress(&app, 0.7, "Extracting selected files...");
+    extract_entries(&result.plaintext, &entry_paths, &output_dir)?;
     emit_progress(&app, 1.0, "Done");
     Ok(())
 }

@@ -1,21 +1,36 @@
 <script lang="ts">
   import '../app.css';
   import GlobalLoader from '$lib/components/GlobalLoader.svelte';
-  import { t, currentLocale } from '$lib/i18n/i18n';
+  import { t, currentLocale, type Locale } from '$lib/i18n/i18n';
+
+  const langs = [
+    { code: 'en', label: 'English' },
+    { code: 'es', label: 'Español' },
+    { code: 'fr', label: 'Français' },
+    { code: 'de', label: 'Deutsch' },
+  ];
 </script>
 
 <GlobalLoader />
 
 <div class="shell">
-  <!-- Compact title bar -->
   <div class="title-bar">
     <div class="brand">
       <img src="/favicon.png" alt="QB" width="18" height="18" class="logo" />
       <span>QuietBox</span>
     </div>
-    <button class="lang-btn" on:click={() => currentLocale.update(l => l === 'es' ? 'en' : 'es')}>
-      {$currentLocale.toUpperCase()}
-    </button>
+    <div class="title-right">
+      <select
+        class="lang-select"
+        value={$currentLocale}
+        on:change={(e) => currentLocale.set(e.currentTarget.value as Locale)}
+        aria-label="Language"
+      >
+        {#each langs as l}
+          <option value={l.code}>{l.label}</option>
+        {/each}
+      </select>
+    </div>
   </div>
 
   <main class="viewport">
@@ -35,12 +50,27 @@
   }
   .brand { display: flex; align-items: center; gap: .45rem; font-size: .88rem; font-weight: 700; color: #f0f6ff; }
   .logo { border-radius: 4px; }
-  .lang-btn {
-    background: #1e3050; border: 1px solid #2a4a72;
-    color: #94aabe; padding: .2rem .5rem;
-    border-radius: 5px; font-size: .72rem; font-weight: 700;
-    cursor: pointer; font-family: 'JetBrains Mono', monospace;
+  .title-right { display: flex; align-items: center; }
+  .lang-select {
+    background: #0b1120;
+    border: 1px solid #2a4a72;
+    color: #94aabe;
+    padding: .22rem .5rem;
+    border-radius: 5px;
+    font-size: .78rem;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 1.4rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234a6580' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right .4rem center;
+    min-width: 90px;
   }
-  .lang-btn:hover { background: #2a4a72; color: #f0f6ff; }
+  .lang-select:hover { border-color: #38bdf8; color: #f0f6ff; }
+  .lang-select:focus { border-color: #38bdf8; }
+  .lang-select option { background: #0b1120; color: #f0f6ff; }
   .viewport { flex: 1; overflow: hidden; position: relative; }
 </style>

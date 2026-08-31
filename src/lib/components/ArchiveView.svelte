@@ -27,6 +27,23 @@
     selected = s;
   }
 
+
+  async function extractSelected() {
+    if (selected.size === 0) return;
+    const dir = await invoke<string | null>('pick_directory');
+    if (!dir) return;
+    const paths = [...selected].map(i => session.entries[i].path);
+    isLoading.set(true); loadingStatus.set($t('extracting')); loadingProgress.set(0);
+    try {
+      await invoke('extract_files', {
+        archivePath: session.path,
+        password: session.password,
+        entryPaths: paths,
+        outputDir: dir,
+      });
+    } finally { isLoading.set(false); }
+  }
+
   async function addFiles() {
     const paths = await invoke<string[]>('pick_files');
     if (!paths.length) return;
@@ -137,6 +154,12 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
       <span>{$t('add_files')}</span>
     </button>
+    {#if selected.size > 0}
+    <button class="tool-btn accent" on:click={extractSelected}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span>{$t('extract_selected')} ({selected.size})</span>
+    </button>
+    {/if}
     <button class="tool-btn" on:click={extractAll}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       <span>{$t('extract_all')}</span>
@@ -245,6 +268,8 @@
     transition: all .15s;
   }
   .tool-btn:hover { background: #162035; border-color: #2a4a72; color: #f0f6ff; }
+  .tool-btn.accent { color: #38bdf8; border-color: rgba(56,189,248,.3); }
+  .tool-btn.accent:hover { background: rgba(56,189,248,.1); border-color: #38bdf8; }
   .sep { width: 1px; height: 20px; background: #1e3050; margin: 0 .25rem; }
   .path-chip { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: #4a6580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 

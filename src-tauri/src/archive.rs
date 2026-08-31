@@ -212,3 +212,33 @@ pub fn unpack_to(zip_bytes: &[u8], output_dir: &str) -> Result<(), CryptVaultErr
 
     Ok(())
 }
+
+/// Extracts specific entries (by path) from an in-memory ZIP to a directory.
+pub fn extract_entries(zip_bytes: &[u8], entry_paths: &[String], output_dir: &str) -> Result<(), CryptVaultError> {
+    let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
+        .map_err(|_| CryptVaultError::InvalidContainer)?;
+
+    let path_set: std::collections::HashSet<&str> = entry_paths.iter().map(|s| s.as_str()).collect();
+    let out_root = Path::new(output_dir);
+    fs::create_dir_all(out_root)?;
+
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)
+            .map_err(|_| CryptVaultError::InvalidContainer)?;
+        let name = file.name().to_string();
+        // match either exact path or file name
+        let file_name = Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or(&name);
+        if !path_set.contains(name.as_str()) && !path_set.contains(file_name) {
+            continue;
+        }
+        let dest = out_root.join(file_name);
+        if file.name().ends_with('/') {
+            fs::create_dir_all(&dest)?;
+        } else {
+            if let Some(p) = dest.parent() { fs::create_dir_all(p)?; }
+            let mut out = File::create(&dest)?;
+            std::io::copy(&mut file, &mut out)?;
+        }
+    }
+    Ok(())
+}

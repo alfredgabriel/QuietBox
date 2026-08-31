@@ -53,5 +53,11 @@
   "alt_added": "Contraseña alternativa configurada.",
   "setup_alt_key": "Configurar Contraseña Alternativa",
   "opened_alt": "Abierto con contraseña alternativa",
-  "opened_primary": "Abierto con contraseña principal"
+  "opened_primary": "Abierto con contraseña principal",
+  "extract_selected": "Extraer Seleccionados",
+  "no_selection": "Selecciona archivos para extraer",
+  "lang_en": "English",
+  "lang_es": "Español",
+  "lang_fr": "Français",
+  "lang_de": "Deutsch"
 }

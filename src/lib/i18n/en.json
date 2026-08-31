@@ -53,5 +53,11 @@
   "alt_added": "Alternative password configured.",
   "setup_alt_key": "Setup Alternative Password",
   "opened_alt": "Opened with alternative password",
-  "opened_primary": "Opened with primary password"
+  "opened_primary": "Opened with primary password",
+  "extract_selected": "Extract Selected",
+  "no_selection": "Select files to extract",
+  "lang_en": "English",
+  "lang_es": "Español",
+  "lang_fr": "Français",
+  "lang_de": "Deutsch"
 }
