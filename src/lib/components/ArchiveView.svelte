@@ -28,6 +28,25 @@
   }
 
 
+
+  async function deleteSelected() {
+    if (selected.size === 0) return;
+    if (!confirm($t('confirm_delete'))) return;
+
+    const paths = [...selected].map(i => session.entries[i].path);
+    isLoading.set(true); loadingStatus.set($t('deleting')); loadingProgress.set(0);
+    try {
+      const entries = await invoke<any[]>('delete_from_archive', {
+        archivePath: session.path,
+        password: session.password,
+        entryPaths: paths,
+      });
+      openSession.update(s => s ? { ...s, entries } : s);
+      session = { ...session, entries };
+      selected = new Set();
+    } finally { isLoading.set(false); }
+  }
+
   async function extractSelected() {
     if (selected.size === 0) return;
     const dir = await invoke<string | null>('pick_directory');
@@ -155,6 +174,12 @@
       <span>{$t('add_files')}</span>
     </button>
     {#if selected.size > 0}
+    <button class="tool-btn danger" on:click={deleteSelected}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      <span>{$t('delete_selected')} ({selected.size})</span>
+    </button>
+    {/if}
+    {#if selected.size > 0}
     <button class="tool-btn accent" on:click={extractSelected}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       <span>{$t('extract_selected')} ({selected.size})</span>
@@ -270,6 +295,8 @@
   .tool-btn:hover { background: #162035; border-color: #2a4a72; color: #f0f6ff; }
   .tool-btn.accent { color: #38bdf8; border-color: rgba(56,189,248,.3); }
   .tool-btn.accent:hover { background: rgba(56,189,248,.1); border-color: #38bdf8; }
+  .tool-btn.danger { color: #f87171; border-color: rgba(239,68,68,.3); }
+  .tool-btn.danger:hover { background: rgba(239,68,68,.12); border-color: #ef4444; }
   .sep { width: 1px; height: 20px; background: #1e3050; margin: 0 .25rem; }
   .path-chip { font-family: 'JetBrains Mono', monospace; font-size: .72rem; color: #4a6580; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 

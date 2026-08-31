@@ -10,7 +10,7 @@ use crate::crypto::container::{
     create_decoy_volume, add_hidden_volume as add_hidden, open_container as open_cont,
 };
 use crate::archive::{
-    unpack_to, extract_entries, create_initial_zip, list_zip_entries, append_to_zip,
+    unpack_to, extract_entries, remove_from_zip, create_initial_zip, list_zip_entries, append_to_zip,
     pack_paths, VaultFileEntry,
 };
 
@@ -291,6 +291,39 @@ pub async fn extract_files(
     extract_entries(&result.plaintext, &entry_paths, &output_dir)?;
     emit_progress(&app, 1.0, "Done");
     Ok(())
+}
+
+
+/// Delete specific files from an archive.
+#[command]
+pub async fn delete_from_archive(
+    app: AppHandle,
+    archive_path: String,
+    password: String,
+    entry_paths: Vec<String>,
+) -> Result<Vec<VaultFileEntry>, CryptVaultError> {
+    emit_progress(&app, 0.1, "Opening archive…");
+    let mut file = OpenOptions::new().read(true).write(true).open(&archive_path)?;
+    let total_size = file.metadata()?.len();
+    let kdf = KdfParams::default();
+
+    let result = open_cont(&mut file, total_size, password.as_bytes(), &kdf)?;
+    emit_progress(&app, 0.4, "Removing selected files…");
+    let updated_zip = remove_from_zip(&result.plaintext, &entry_paths)?;
+
+    let app_clone = app.clone();
+    let on_progress = move |p: f64, s: &str| emit_progress(&app_clone, 0.40 + p * 0.55, s);
+
+    if result.is_hidden {
+        add_hidden(&mut file, total_size, 0, &updated_zip, password.as_bytes(),
+                   HIDDEN_RESERVED, &kdf, on_progress)?;
+    } else {
+        create_decoy_volume(&mut file, total_size, &updated_zip, password.as_bytes(),
+                            HIDDEN_RESERVED, &kdf, on_progress)?;
+    }
+
+    emit_progress(&app, 1.0, "Done");
+    list_zip_entries(&updated_zip).map_err(Into::into)
 }
 
 // ── File pickers ──────────────────────────────────────────────────────────

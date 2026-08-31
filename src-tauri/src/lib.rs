@@ -18,6 +18,7 @@ pub fn run() {
             commands::add_to_archive,
             commands::extract_archive,
             commands::extract_files,
+            commands::delete_from_archive,
             commands::pick_files,
             commands::pick_directory,
             commands::pick_open_qbv,

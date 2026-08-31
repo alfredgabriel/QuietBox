@@ -242,3 +242,51 @@ pub fn extract_entries(zip_bytes: &[u8], entry_paths: &[String], output_dir: &st
     }
     Ok(())
 }
+
+/// Removes specified entries from an in-memory ZIP archive and returns the new ZIP bytes.
+pub fn remove_from_zip(existing_zip: &[u8], paths_to_remove: &[String]) -> Result<Vec<u8>, CryptVaultError> {
+    if existing_zip.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let remove_set: std::collections::HashSet<&str> = paths_to_remove.iter().map(|s| s.as_str()).collect();
+    let mut entries_map = std::collections::HashMap::new();
+
+    if let Ok(mut archive) = ZipArchive::new(Cursor::new(existing_zip)) {
+        for i in 0..archive.len() {
+            if let Ok(mut file) = archive.by_index(i) {
+                let name = file.name().to_string();
+                let trimmed = name.trim_end_matches('/').to_string();
+                let file_name = Path::new(&trimmed).file_name().and_then(|n| n.to_str()).unwrap_or(&trimmed).to_string();
+
+                if remove_set.contains(name.as_str()) || remove_set.contains(trimmed.as_str()) || remove_set.contains(file_name.as_str()) {
+                    continue;
+                }
+
+                let mut data = Vec::new();
+                let _ = file.read_to_end(&mut data);
+                entries_map.insert(name, (file.is_dir(), data));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut out));
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored);
+
+        for (name, (is_dir, data)) in entries_map {
+            if is_dir {
+                let _ = zip.add_directory(&name, options);
+            } else {
+                if zip.start_file(&name, options).is_ok() {
+                    let _ = zip.write_all(&data);
+                }
+            }
+        }
+        zip.finish().map_err(|e| CryptVaultError::Serialization(e.to_string()))?;
+    }
+
+    Ok(out)
+}
