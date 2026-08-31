@@ -3,10 +3,9 @@ use tauri_plugin_dialog::DialogExt;
 use std::fs::OpenOptions;
 
 use crate::errors::CryptVaultError;
-use crate::crypto::kdf::{KdfParams, derive_key};
+use crate::crypto::kdf::KdfParams;
 use crate::crypto::container::{
     create_decoy_volume, add_hidden_volume as add_hidden, open_container as open_cont,
-    unseal_header, DECOY_HEADER_OFFSET, HEADER_BLOCK_SIZE
 };
 use crate::archive::{pack_paths, unpack_to};
 
@@ -88,7 +87,6 @@ pub async fn create_container(
 pub async fn add_hidden_volume(
     app: AppHandle,
     container_path: String,
-    decoy_password: Option<String>,
     hidden_password: String,
     hidden_files: Vec<String>,
     max_hidden_size_mb: u64,
@@ -117,31 +115,13 @@ pub async fn add_hidden_volume(
     if let Some(t) = kdf_t_cost { kdf_params.t_cost = t; }
     if let Some(p) = kdf_p_cost { kdf_params.p_cost = p; }
 
-    let decoy_end = if let Some(decoy_pw) = decoy_password {
-        let mut decoy_block = vec![0u8; HEADER_BLOCK_SIZE];
-        use std::io::{Seek, SeekFrom, Read};
-        file.seek(SeekFrom::Start(DECOY_HEADER_OFFSET))?;
-        file.read_exact(&mut decoy_block)?;
-
-        let decoy_salt: [u8; 32] = decoy_block[..32]
-            .try_into()
-            .map_err(|_| CryptVaultError::InvalidContainer)?;
-
-        let decoy_key = derive_key(decoy_pw.as_bytes(), &decoy_salt, &kdf_params)?;
-        let decoy_header = unseal_header(&decoy_block, &decoy_key)?;
-        
-        DECOY_HEADER_OFFSET + HEADER_BLOCK_SIZE as u64 + decoy_header.data_size + 16
-    } else {
-        return Err(CryptVaultError::DecryptionFailed);
-    };
-
     let total_size_bytes = total_size_mb * 1024 * 1024;
     let max_hidden_size_bytes = max_hidden_size_mb * 1024 * 1024;
 
     add_hidden(
         &mut file,
         total_size_bytes,
-        decoy_end,
+        0,
         &hidden_zip,
         hidden_password.as_bytes(),
         max_hidden_size_bytes,

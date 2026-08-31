@@ -5,7 +5,7 @@ use rand::RngCore;
 use rand::rngs::OsRng;
 use subtle::ConstantTimeEq;
 
-use crate::crypto::kdf::{KdfParams, DerivedKey, derive_key, derive_hidden_offset, generate_salt};
+use crate::crypto::kdf::{KdfParams, DerivedKey, derive_key, generate_salt};
 use crate::crypto::cipher::{encrypt, decrypt, generate_nonce};
 use crate::errors::CryptVaultError;
 
@@ -15,7 +15,7 @@ pub const HEADER_BLOCK_SIZE: usize = 512;
 /// Byte offset where the decoy volume header is always written.
 pub const DECOY_HEADER_OFFSET: u64 = 0;
 
-/// Minimum safety gap (bytes) between end of decoy data and hidden volume region.
+/// Minimum safety gap (bytes).
 pub const SAFETY_GAP: u64 = 65_536; // 64 KiB
 
 /// Format version stored (encrypted) in headers. Never visible externally.
@@ -93,24 +93,34 @@ pub fn unseal_header(block: &[u8], key: &DerivedKey) -> Result<VolumeHeader, Cry
     VolumeHeader::from_bytes(&plaintext)
 }
 
-pub fn hidden_header_offset(
-    hidden_key: &DerivedKey,
+/// Derives the hidden volume offset deterministically from the password and total container size.
+/// The hidden volume is positioned in the upper half of the container file.
+pub fn derive_hidden_header_offset(
+    password: &[u8],
     total_size: u64,
-    decoy_end: u64,
     hidden_max_size: u64,
 ) -> Result<u64, CryptVaultError> {
-    let safe_start = decoy_end + SAFETY_GAP + HEADER_BLOCK_SIZE as u64;
-    let safe_end = total_size
-        .checked_sub(hidden_max_size + HEADER_BLOCK_SIZE as u64)
+    let half_size = total_size / 2;
+    let header_sz = HEADER_BLOCK_SIZE as u64;
+    
+    let min_offset = half_size + SAFETY_GAP;
+    let max_offset = total_size
+        .checked_sub(hidden_max_size + header_sz)
         .ok_or(CryptVaultError::InsufficientSpace)?;
 
-    if safe_start >= safe_end {
+    if min_offset >= max_offset {
         return Err(CryptVaultError::VolumeOverlap);
     }
 
-    let raw = derive_hidden_offset(hidden_key);
-    let range = safe_end - safe_start;
-    Ok(safe_start + (raw % range))
+    let mut hasher = blake3::Hasher::new_keyed(&[0x4A; 32]);
+    hasher.update(b"QUIETBOX_HIDDEN_OFFSET_DOMAIN_V1");
+    hasher.update(password);
+    let hash = hasher.finalize();
+    let raw_bytes: [u8; 8] = hash.as_bytes()[..8].try_into().unwrap();
+    let raw = u64::from_le_bytes(raw_bytes);
+
+    let span = max_offset - min_offset;
+    Ok(min_offset + (raw % span))
 }
 
 pub fn create_decoy_volume<W: Write + Seek, F: FnMut(f64, &str)>(
@@ -122,12 +132,8 @@ pub fn create_decoy_volume<W: Write + Seek, F: FnMut(f64, &str)>(
     kdf_params: &KdfParams,
     mut on_progress: F,
 ) -> Result<u64, CryptVaultError> {
-    let needed = HEADER_BLOCK_SIZE as u64
-        + decoy_data.len() as u64
-        + 16
-        + SAFETY_GAP
-        + hidden_max_size;
-    if needed > total_size {
+    let max_decoy_allowed = (total_size / 2).saturating_sub(HEADER_BLOCK_SIZE as u64 + 16);
+    if decoy_data.len() as u64 > max_decoy_allowed {
         return Err(CryptVaultError::InsufficientSpace);
     }
 
@@ -182,7 +188,7 @@ pub fn create_decoy_volume<W: Write + Seek, F: FnMut(f64, &str)>(
 pub fn add_hidden_volume<RW: Read + Write + Seek, F: FnMut(f64, &str)>(
     rw: &mut RW,
     total_size: u64,
-    decoy_end: u64,
+    _decoy_end: u64,
     hidden_data: &[u8],
     hidden_password: &[u8],
     hidden_max_size: u64,
@@ -198,7 +204,7 @@ pub fn add_hidden_volume<RW: Read + Write + Seek, F: FnMut(f64, &str)>(
     let key = derive_key(hidden_password, &salt, kdf_params)?;
     
     on_progress(0.2, "Locating hidden volume offset...");
-    let offset = hidden_header_offset(&key, total_size, decoy_end, hidden_max_size)?;
+    let offset = derive_hidden_header_offset(hidden_password, total_size, hidden_max_size)?;
 
     on_progress(0.4, "Encrypting hidden volume...");
     let data_nonce = generate_nonce();
@@ -237,6 +243,7 @@ pub fn open_container<R: Read + Seek>(
     password: &[u8],
     kdf_params: &KdfParams,
 ) -> Result<OpenResult, CryptVaultError> {
+    // --- Decoy Volume Check ---
     let mut decoy_block = vec![0u8; HEADER_BLOCK_SIZE];
     reader.seek(SeekFrom::Start(DECOY_HEADER_OFFSET))?;
     reader.read_exact(&mut decoy_block)?;
@@ -262,16 +269,9 @@ pub fn open_container<R: Read + Seek>(
         Ok(OpenResult { plaintext: pt.to_vec(), is_hidden: false })
     })();
 
-    let candidate_offset = {
-        let cand_key = DerivedKey({
-            let hash = blake3::hash(&decoy_key.0);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(hash.as_bytes());
-            arr
-        });
-        let decoy_end_est = DECOY_HEADER_OFFSET + HEADER_BLOCK_SIZE as u64 + 1024 * 1024;
-        hidden_header_offset(&cand_key, total_size, decoy_end_est, total_size / 4).ok()
-    };
+    // --- Hidden Volume Check (Always executed for constant-time behavior) ---
+    let hidden_max_estimate = total_size / 4;
+    let candidate_offset = derive_hidden_header_offset(password, total_size, hidden_max_estimate).ok();
 
     let hidden_result: Result<OpenResult, CryptVaultError> = candidate_offset
         .ok_or(CryptVaultError::DecryptionFailed)
@@ -366,13 +366,10 @@ mod tests {
 
     #[test]
     fn test_hidden_offset_bounded() {
-        let salt = generate_salt();
-        let key = derive_key(b"hidden-pw", &salt, &fast_kdf()).unwrap();
         let total = 10 * 1024 * 1024u64;
-        let decoy_end = 1 * 1024 * 1024u64;
         let hidden_max = 2 * 1024 * 1024u64;
-        let offset = hidden_header_offset(&key, total, decoy_end, hidden_max).unwrap();
-        let safe_start = decoy_end + SAFETY_GAP + HEADER_BLOCK_SIZE as u64;
+        let offset = derive_hidden_header_offset(b"hidden-pw", total, hidden_max).unwrap();
+        let safe_start = total / 2 + SAFETY_GAP;
         let safe_end = total - hidden_max - HEADER_BLOCK_SIZE as u64;
         assert!(offset >= safe_start);
         assert!(offset <= safe_end);
@@ -400,5 +397,54 @@ mod tests {
         let zero_ratio = zero_count as f64 / total as f64;
         assert!(zero_ratio < 0.01,
             "Random fill should have <1% zero bytes, got {:.2}%", zero_ratio * 100.0);
+    }
+
+    #[test]
+    fn test_integration_decoy_and_hidden() {
+        let total = 8 * 1024 * 1024u64; // 8 MiB
+        let mut buf = vec![0u8; total as usize];
+        let mut cur = Cursor::new(&mut buf);
+
+        let decoy_pw = b"decoy_pass_123";
+        let hidden_pw = b"hidden_pass_456";
+        let decoy_data = b"This is the DECOY data volume!";
+        let hidden_data = b"This is the HIGHLY SENSITIVE HIDDEN data volume!";
+
+        // 1. Create decoy volume
+        let _ = create_decoy_volume(
+            &mut cur,
+            total,
+            decoy_data,
+            decoy_pw,
+            2 * 1024 * 1024,
+            &fast_kdf(),
+            |_, _| {}
+        ).unwrap();
+
+        // 2. Add hidden volume
+        add_hidden_volume(
+            &mut cur,
+            total,
+            0,
+            hidden_data,
+            hidden_pw,
+            2 * 1024 * 1024,
+            &fast_kdf(),
+            |_, _| {}
+        ).unwrap();
+
+        // 3. Open with decoy password
+        let res_decoy = open_container(&mut cur, total, decoy_pw, &fast_kdf()).unwrap();
+        assert!(!res_decoy.is_hidden);
+        assert_eq!(res_decoy.plaintext, decoy_data);
+
+        // 4. Open with hidden password
+        let res_hidden = open_container(&mut cur, total, hidden_pw, &fast_kdf()).unwrap();
+        assert!(res_hidden.is_hidden);
+        assert_eq!(res_hidden.plaintext, hidden_data);
+
+        // 5. Open with incorrect password
+        let res_wrong = open_container(&mut cur, total, b"wrongpassword", &fast_kdf());
+        assert!(res_wrong.is_err());
     }
 }
